@@ -238,10 +238,11 @@ export default function Dashboard() {
   const [form, setForm] = useState(false);
   const [loading, setLoading] = useState(true);
   const [lastRefresh, setLastRefresh] = useState(null);
-  // Date range: default last 7 days
-  const [startDate, setStartDate] = useState(() => { const d = new Date(); d.setDate(d.getDate() - 7); return d.toISOString().slice(0, 16); });
-  const [endDate, setEndDate] = useState(() => new Date().toISOString().slice(0, 16));
-  const setQuickRange = (days) => { const e = new Date(); const s = new Date(); s.setDate(s.getDate() - days); setStartDate(s.toISOString().slice(0, 16)); setEndDate(e.toISOString().slice(0, 16)); };
+  // Date range: default last 7 days (local time)
+  const toLocalISO = (d) => { const off = d.getTimezoneOffset(); const local = new Date(d.getTime() - off * 60000); return local.toISOString().slice(0, 16); };
+  const [startDate, setStartDate] = useState(() => { const d = new Date(); d.setDate(d.getDate() - 7); return toLocalISO(d); });
+  const [endDate, setEndDate] = useState(() => toLocalISO(new Date()));
+  const setQuickRange = (days) => { const e = new Date(); const s = new Date(); s.setDate(s.getDate() - days); setStartDate(toLocalISO(s)); setEndDate(toLocalISO(e)); };
 
   const loadProjects = useCallback(async () => {
     try { const data = await supaFetch("projects", "select=*&order=install_date.desc"); setProjects(data); if (data.length && !selId) setSelId(data[0].id); } catch (e) { console.error(e); }
@@ -312,7 +313,7 @@ export default function Dashboard() {
                   <div style={{ color: C.textMuted, fontSize: 12, fontFamily: mono, marginTop: 4 }}>
                     {proj.city} {proj.install_date && `· ${new Date(proj.install_date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`} {proj.sq_ft && `· ${proj.sq_ft.toLocaleString()} sq ft`}
                   </div>
-                  <div style={{ color: C.textMuted, fontSize: 10, fontFamily: mono, marginTop: 2 }}>Auto-refreshes 60s · {allR.length} readings</div>
+                  <div style={{ color: C.textMuted, fontSize: 10, fontFamily: mono, marginTop: 2 }}>Auto-refreshes 60s · {allR.length} readings{lat && ` · Last: ${new Date(lat.recorded_at).toLocaleString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`}</div>
                 </div>
                 <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                   <button onClick={() => { loadReadings(selId); setLastRefresh(new Date()); }} style={btnStyle(false)}>↻ Refresh</button>
