@@ -136,10 +136,11 @@ function Card({ project, sel, onClick, readings }) {
       <div><div style={{ color: C.textPrimary, fontWeight: 600, fontSize: 13, fontFamily: heading, letterSpacing: "0.03em" }}>{project.address}</div><div style={{ color: C.textMuted, fontSize: 11, fontFamily: mono, marginTop: 2 }}>{project.city}</div></div>
       <div style={{ background: hasData ? `${C.teal}20` : `${C.amber}20`, color: hasData ? C.teal : C.amber, fontSize: 9, padding: "2px 8px", borderRadius: 20, fontFamily: mono, fontWeight: 500 }}>{hasData ? "LIVE" : "NO DATA"}</div>
     </div>
-    {hasData && <div style={{ display: "flex", gap: 14 }}>
-      <div><div style={{ color: C.textMuted, fontSize: 9, fontFamily: mono }}>ATTIC</div><div style={{ color: C.red, fontSize: 17, fontWeight: 700, fontFamily: heading }}>{lat.temp_attic}°</div></div>
-      <div><div style={{ color: C.textMuted, fontSize: 9, fontFamily: mono }}>INDOOR</div><div style={{ color: C.teal, fontSize: 17, fontWeight: 700, fontFamily: heading }}>{lat.temp_indoor}°</div></div>
-      <div style={{ marginLeft: "auto", textAlign: "right" }}><div style={{ color: C.textMuted, fontSize: 9, fontFamily: mono }}>SAVED</div><div style={{ color: C.purple, fontSize: 17, fontWeight: 700, fontFamily: heading }}>${sav.dollarsSaved}</div></div>
+    {hasData && <div style={{ display: "flex", gap: 12 }}>
+      <div><div style={{ color: C.textMuted, fontSize: 9, fontFamily: mono }}>ATTIC</div><div style={{ color: C.red, fontSize: 16, fontWeight: 700, fontFamily: heading }}>{lat.temp_attic}°</div></div>
+      <div><div style={{ color: C.textMuted, fontSize: 9, fontFamily: mono }}>IN</div><div style={{ color: C.teal, fontSize: 16, fontWeight: 700, fontFamily: heading }}>{lat.temp_indoor}°</div></div>
+      <div><div style={{ color: C.textMuted, fontSize: 9, fontFamily: mono }}>OUT</div><div style={{ color: C.amber, fontSize: 16, fontWeight: 700, fontFamily: heading }}>{lat.temp_outdoor}°</div></div>
+      <div style={{ marginLeft: "auto", textAlign: "right" }}><div style={{ color: C.textMuted, fontSize: 9, fontFamily: mono }}>SAVED</div><div style={{ color: C.purple, fontSize: 16, fontWeight: 700, fontFamily: heading }}>${sav.dollarsSaved}</div></div>
     </div>}
   </div>);
 }
@@ -211,18 +212,18 @@ function Loader() {
 }
 
 // ─── Chart label formatter ──────────────────────────────────────────────────
-function formatChartData(readings, range) {
+function formatChartData(readings, rangeDays) {
   if (!readings.length) return [];
   const sampleRate = Math.max(1, Math.floor(readings.length / 60));
   return readings.filter((_, i) => i % sampleRate === 0).map(r => {
     const d = new Date(r.recorded_at);
     let label;
-    if (range <= 1) {
-      label = d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
-    } else if (range <= 7) {
-      label = d.toLocaleDateString("en-US", { weekday: "short", hour: "numeric" });
+    if (rangeDays <= 1) {
+      label = d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/New_York" });
+    } else if (rangeDays <= 7) {
+      label = d.toLocaleDateString("en-US", { weekday: "short", hour: "numeric", timeZone: "America/New_York" });
     } else {
-      label = d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+      label = d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "America/New_York" });
     }
     return { label, attic: +r.temp_attic, indoor: +r.temp_indoor, outdoor: +r.temp_outdoor };
   });
@@ -234,16 +235,19 @@ export default function Dashboard() {
   const [projects, setProjects] = useState([]);
   const [readings, setReadings] = useState({});
   const [selId, setSelId] = useState(null);
-  const [range, setRange] = useState(7);
   const [form, setForm] = useState(false);
   const [loading, setLoading] = useState(true);
   const [lastRefresh, setLastRefresh] = useState(null);
+  // Date range: default last 7 days
+  const [startDate, setStartDate] = useState(() => { const d = new Date(); d.setDate(d.getDate() - 7); return d.toISOString().slice(0, 16); });
+  const [endDate, setEndDate] = useState(() => new Date().toISOString().slice(0, 16));
+  const setQuickRange = (days) => { const e = new Date(); const s = new Date(); s.setDate(s.getDate() - days); setStartDate(s.toISOString().slice(0, 16)); setEndDate(e.toISOString().slice(0, 16)); };
 
   const loadProjects = useCallback(async () => {
     try { const data = await supaFetch("projects", "select=*&order=install_date.desc"); setProjects(data); if (data.length && !selId) setSelId(data[0].id); } catch (e) { console.error(e); }
   }, [selId]);
   const loadReadings = useCallback(async (pid) => {
-    try { const data = await supaFetch("readings", `select=*&project_id=eq.${pid}&order=recorded_at.asc&limit=5000`); setReadings(prev => ({ ...prev, [pid]: data })); } catch (e) { console.error(e); }
+    try { const data = await supaFetch("readings", `select=*&project_id=eq.${pid}&order=recorded_at.asc&limit=10000`); setReadings(prev => ({ ...prev, [pid]: data })); } catch (e) { console.error(e); }
   }, []);
 
   useEffect(() => { if (!auth) return; setLoading(true); loadProjects().then(() => setLoading(false)); }, [auth, loadProjects]);
@@ -254,16 +258,19 @@ export default function Dashboard() {
 
   const proj = projects.find(p => p.id === selId);
   const allR = readings[selId] || [];
-  const cutoff = Date.now() - range * 86400000;
-  const filteredR = allR.filter(r => new Date(r.recorded_at).getTime() > cutoff);
+  const startMs = new Date(startDate).getTime();
+  const endMs = new Date(endDate).getTime();
+  const rangeDays = (endMs - startMs) / 86400000;
+  const filteredR = allR.filter(r => { const t = new Date(r.recorded_at).getTime(); return t >= startMs && t <= endMs; });
   const sav = calcSavings(proj, allR); const lat = allR[allR.length - 1]; const cum = getCumData(proj, allR);
-  const chartData = formatChartData(filteredR, range);
+  const chartData = formatChartData(filteredR, rangeDays);
   const totD = projects.reduce((s, p) => s + calcSavings(p, readings[p.id] || []).dollarsSaved, 0);
   const totK = projects.reduce((s, p) => s + calcSavings(p, readings[p.id] || []).kwhSaved, 0);
   const uV = proj ? (proj.ceiling_u || computeU(typeof proj.insulation === "string" ? JSON.parse(proj.insulation) : (proj.insulation || []))) : 0.05;
   const handleSave = async (data) => { try { await supaUpsert("projects", { id: selId, ...data }); await loadProjects(); setForm(false); } catch (e) { alert("Failed to save."); } };
 
   const btnStyle = (active) => ({ padding: "5px 12px", fontSize: 11, fontFamily: mono, cursor: "pointer", borderRadius: 6, border: `1px solid ${active ? C.purple : C.border}`, background: active ? `${C.purple}20` : "transparent", color: active ? C.purpleLight : C.textMuted, fontWeight: active ? 600 : 400, transition: "all 0.15s" });
+  const dtStyle = { ...inpS, width: "auto", fontSize: 11, padding: "5px 8px", background: C.inputBg, colorScheme: "dark" };
 
   return (
     <div style={{ minHeight: "100vh", background: C.bg, color: C.textPrimary, fontFamily: body }}>
@@ -307,11 +314,19 @@ export default function Dashboard() {
                   </div>
                   <div style={{ color: C.textMuted, fontSize: 10, fontFamily: mono, marginTop: 2 }}>Auto-refreshes 60s · {allR.length} readings</div>
                 </div>
-                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                   <button onClick={() => { loadReadings(selId); setLastRefresh(new Date()); }} style={btnStyle(false)}>↻ Refresh</button>
                   <button onClick={() => setForm(!form)} style={btnStyle(form)}>{form ? "✕ Close" : "✎ Edit"}</button>
-                  <div style={{ display: "flex", gap: 4 }}>{[1, 7, 14, 30].map(d => (<button key={d} onClick={() => setRange(d)} style={btnStyle(range === d)}>{d}d</button>))}</div>
+                  <div style={{ display: "flex", gap: 4 }}>{[["1d", 1], ["7d", 7], ["14d", 14], ["30d", 30], ["All", 365]].map(([label, d]) => (<button key={label} onClick={() => setQuickRange(d)} style={btnStyle(false)}>{label}</button>))}</div>
                 </div>
+              </div>
+              {/* Date range picker */}
+              <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 20 }}>
+                <span style={{ fontSize: 10, color: C.textMuted, fontFamily: mono }}>FROM</span>
+                <input type="datetime-local" value={startDate} onChange={e => setStartDate(e.target.value)} style={dtStyle} />
+                <span style={{ fontSize: 10, color: C.textMuted, fontFamily: mono }}>TO</span>
+                <input type="datetime-local" value={endDate} onChange={e => setEndDate(e.target.value)} style={dtStyle} />
+                <span style={{ fontSize: 11, color: C.textMuted, fontFamily: mono, marginLeft: 8 }}>{filteredR.length} of {allR.length} readings</span>
               </div>
 
               {form && <div style={{ marginBottom: 24 }}><Form project={proj} onSave={handleSave} onCancel={() => setForm(false)} /></div>}
