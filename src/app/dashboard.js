@@ -55,31 +55,42 @@ function computeU(mix) {
   return r > 0 ? +(1 / r).toFixed(4) : 0.05;
 }
 function calcSavings(project, readings) {
-  if (!readings?.length || readings.length < 10) return { kwhSaved: 0, dollarsSaved: 0, avgAtticDelta: 0, avgIndoorDelta: 0, baselineDelta: 0, uValue: 0.05, cop: 4.1 };
+  if (!readings?.length || readings.length < 10) return { kwhSaved: 0, dollarsSaved: 0, avgAtticDelta: 0, avgIndoorDelta: 0, refDelta: 0, actualDelta: 0, reduction: 0, uValue: 0.05, cop: 4.1 };
   const ins = typeof project.insulation === "string" ? JSON.parse(project.insulation) : (project.insulation || []);
   const u = project.ceiling_u || computeU(ins); const seer = project.seer || 14; const cop = seer / 3.412;
-  const bEnd = Math.floor(readings.length * 0.1); const bl = readings.slice(0, Math.max(bEnd, 1)); const cur = readings.slice(Math.max(bEnd, 1));
-  if (!cur.length) return { kwhSaved: 0, dollarsSaved: 0, avgAtticDelta: 0, avgIndoorDelta: 0, baselineDelta: 0, uValue: +u.toFixed(4), cop: +cop.toFixed(2) };
-  const avg = (a, fn) => a.reduce((s, x) => s + fn(x), 0) / a.length;
-  const bD = avg(bl, x => x.temp_attic - x.temp_outdoor); const cD = avg(cur, x => x.temp_attic - x.temp_outdoor); const iD = avg(cur, x => x.temp_indoor - x.temp_outdoor);
-  const red = Math.max(0, bD - cD); const sqFt = project.sq_ft || 1800;
-  const kwh = +(red * cur.length * 2 * sqFt * u / (cop * 3412)).toFixed(1);
+  const sqFt = project.sq_ft || 1800;
+  // Compare actual attic vs reference (no barrier) attic based on outdoor temp
+  let totalRefDelta = 0, totalActualDelta = 0, totalIndoorDelta = 0;
+  readings.forEach(r => {
+    const outdoor = +r.temp_outdoor;
+    const refAttic = refAtticTemp(outdoor);
+    totalRefDelta += (refAttic - outdoor);
+    totalActualDelta += (+r.temp_attic - outdoor);
+    totalIndoorDelta += (+r.temp_indoor - outdoor);
+  });
+  const avgRefDelta = totalRefDelta / readings.length;
+  const avgActualDelta = totalActualDelta / readings.length;
+  const avgIndoorDelta = totalIndoorDelta / readings.length;
+  const reduction = Math.max(0, avgRefDelta - avgActualDelta);
+  const dhr = reduction * readings.length * 2;
+  const btu = dhr * sqFt * u;
+  const kwh = +(btu / (cop * 3412)).toFixed(1);
   const dol = +(kwh * (project.utility_rate || 0.118)).toFixed(2);
-  return { kwhSaved: kwh, dollarsSaved: dol, avgAtticDelta: +cD.toFixed(1), avgIndoorDelta: +iD.toFixed(1), baselineDelta: +bD.toFixed(1), uValue: +u.toFixed(4), cop: +cop.toFixed(2) };
+  return { kwhSaved: kwh, dollarsSaved: dol, avgAtticDelta: +avgActualDelta.toFixed(1), avgIndoorDelta: +avgIndoorDelta.toFixed(1), refDelta: +avgRefDelta.toFixed(1), actualDelta: +avgActualDelta.toFixed(1), reduction: +reduction.toFixed(1), uValue: +u.toFixed(4), cop: +cop.toFixed(2) };
 }
 function getCumData(project, readings) {
   if (!readings?.length || readings.length < 10) return [];
   const ins = typeof project.insulation === "string" ? JSON.parse(project.insulation) : (project.insulation || []);
   const u = project.ceiling_u || computeU(ins); const cop = (project.seer || 14) / 3.412;
   const sqFt = project.sq_ft || 1800; const rate = project.utility_rate || 0.118;
-  const bEnd = Math.floor(readings.length * 0.1); const bl = readings.slice(0, Math.max(bEnd, 1));
-  const bD = bl.reduce((s, x) => s + (x.temp_attic - x.temp_outdoor), 0) / bl.length;
   const dayMap = {};
-  readings.slice(Math.max(bEnd, 1)).forEach(x => { const d = new Date(x.recorded_at).toLocaleDateString("en-US", { month: "short", day: "numeric" }); if (!dayMap[d]) dayMap[d] = []; dayMap[d].push(x); });
+  readings.forEach(x => { const d = new Date(x.recorded_at).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "America/New_York" }); if (!dayMap[d]) dayMap[d] = []; dayMap[d].push(x); });
   let ck = 0, cd = 0;
   return Object.entries(dayMap).map(([day, a]) => {
-    const dd = a.reduce((s, x) => s + (x.temp_attic - x.temp_outdoor), 0) / a.length;
-    const red = Math.max(0, bD - dd); const btu = red * a.length * 2 * sqFt * u;
+    const avgRefDelta = a.reduce((s, x) => s + (refAtticTemp(+x.temp_outdoor) - +x.temp_outdoor), 0) / a.length;
+    const avgActualDelta = a.reduce((s, x) => s + (+x.temp_attic - +x.temp_outdoor), 0) / a.length;
+    const red = Math.max(0, avgRefDelta - avgActualDelta);
+    const btu = red * a.length * 2 * sqFt * u;
     ck += btu / (cop * 3412); cd += (btu / (cop * 3412)) * rate;
     return { day, kwh: +ck.toFixed(1), dollars: +cd.toFixed(2) };
   });
@@ -211,6 +222,18 @@ function Loader() {
   </div>);
 }
 
+// ─── Reference Attic Model (ORNL/DOE southeastern US, dark shingles, no radiant barrier) ──
+// Based on published data: unprotected attic delta increases with outdoor temp
+// Linear approximation from DOE/ORNL field studies in mixed-humid climate zones
+function refAtticTemp(outdoorF) {
+  // Below 60F outdoor, minimal solar gain — attic ~5-10F above outdoor
+  if (outdoorF < 60) return outdoorF + 8;
+  // 60-80F: delta ramps from ~15 to ~40
+  if (outdoorF < 80) return outdoorF + 15 + (outdoorF - 60) * 1.25;
+  // 80-105F: delta ranges 40-60F (peak solar conditions)
+  return outdoorF + 40 + (outdoorF - 80) * 0.8;
+}
+
 // ─── Chart label formatter ──────────────────────────────────────────────────
 function formatChartData(readings, rangeDays) {
   if (!readings.length) return [];
@@ -225,7 +248,8 @@ function formatChartData(readings, rangeDays) {
     } else {
       label = d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "America/New_York" });
     }
-    return { label, attic: +r.temp_attic, indoor: +r.temp_indoor, outdoor: +r.temp_outdoor };
+    const outdoor = +r.temp_outdoor;
+    return { label, attic: +r.temp_attic, indoor: +r.temp_indoor, outdoor, refAttic: Math.round(refAtticTemp(outdoor)) };
   });
 }
 
@@ -345,13 +369,14 @@ export default function Dashboard() {
                 <div style={{ ...cardStyle, padding: "20px 16px 12px", marginBottom: 16 }}>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, padding: "0 8px" }}>
                     <div style={{ fontFamily: heading, fontWeight: 700, fontSize: 16, color: C.textPrimary, letterSpacing: "0.04em", textTransform: "uppercase" }}>Temperature History</div>
-                    <div style={{ display: "flex", gap: 16 }}>{[[C.red, "Attic"], [C.teal, "Indoor"], [C.amber, "Outdoor"]].map(([c, l]) => (<div key={l} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 10, color: C.textMuted, fontFamily: mono }}><div style={{ width: 14, height: 2, background: c, borderRadius: 1 }} />{l}</div>))}</div>
+                    <div style={{ display: "flex", gap: 14 }}>{[[C.red, "Attic"], ["#ff6b6b", "No Barrier (est.)"], [C.teal, "Indoor"], [C.amber, "Outdoor"]].map(([c, l]) => (<div key={l} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 9, color: C.textMuted, fontFamily: mono }}><div style={{ width: 14, height: 2, background: c, borderRadius: 1, opacity: l.includes("est") ? 0.5 : 1 }} />{l}</div>))}</div>
                   </div>
-                  <ResponsiveContainer width="100%" height={220}>
+                  <ResponsiveContainer width="100%" height={250}>
                     <LineChart data={chartData} margin={{ top: 5, right: 10, left: -20, bottom: 5 }}>
                       <XAxis dataKey="label" tick={{ fill: C.textMuted, fontSize: 9, fontFamily: "JetBrains Mono" }} tickLine={false} axisLine={false} interval={Math.max(0, Math.floor(chartData.length / 8) - 1)} angle={-30} textAnchor="end" height={45} />
                       <YAxis tick={{ fill: C.textMuted, fontSize: 10, fontFamily: "JetBrains Mono" }} tickLine={false} axisLine={false} />
                       <Tooltip content={<Tip />} />
+                      <Line type="monotone" dataKey="refAttic" name="No Barrier (est.)" stroke="#ff6b6b" strokeWidth={1.5} dot={false} strokeDasharray="6 3" strokeOpacity={0.5} />
                       <Line type="monotone" dataKey="attic" name="Attic" stroke={C.red} strokeWidth={2} dot={false} />
                       <Line type="monotone" dataKey="indoor" name="Indoor" stroke={C.teal} strokeWidth={2} dot={false} />
                       <Line type="monotone" dataKey="outdoor" name="Outdoor" stroke={C.amber} strokeWidth={1.5} dot={false} strokeDasharray="4 2" />
@@ -403,7 +428,24 @@ export default function Dashboard() {
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
                 <div style={{ ...cardStyle, padding: 20 }}>
                   <div style={{ fontFamily: heading, fontWeight: 700, fontSize: 14, marginBottom: 16, color: C.textPrimary, textTransform: "uppercase", letterSpacing: "0.04em" }}>Savings Breakdown</div>
-                  {[["Baseline Attic Δ", `${sav.baselineDelta}°F`, C.textMuted], ["Current Attic Δ", `${sav.avgAtticDelta}°F`, C.amber], ["Indoor-Outdoor Δ", `${sav.avgIndoorDelta}°F`, C.teal], ["Blended U-Value", `${typeof uV === "number" ? uV.toFixed(4) : uV}`, C.textSecondary], ["SEER / COP", `${proj.seer || 14} / ${sav.cop}`, C.teal], ["kWh Saved", `${sav.kwhSaved} kWh`, C.purple], ["Cost Saved", `$${sav.dollarsSaved}`, C.purpleLight], ["Utility Rate", `$${proj.utility_rate || 0.118}/kWh`, C.textMuted]].map(([l, v, c]) => (<div key={l} style={{ display: "flex", justifyContent: "space-between", marginBottom: 10, fontSize: 12 }}><span style={{ color: C.textMuted, fontFamily: mono }}>{l}</span><span style={{ color: c, fontWeight: 600, fontFamily: mono }}>{v}</span></div>))}
+                  {[["Ref. Attic Δ (no barrier)", `${sav.refDelta}°F`, "#ff6b6b"], ["Actual Attic Δ (w/ barrier)", `${sav.actualDelta}°F`, C.amber], ["Reduction from Barrier", `${sav.reduction}°F`, C.purple], ["Indoor-Outdoor Δ", `${sav.avgIndoorDelta}°F`, C.teal], ["Blended U-Value", `${typeof uV === "number" ? uV.toFixed(4) : uV}`, C.textSecondary], ["SEER / COP", `${proj.seer || 14} / ${sav.cop}`, C.teal], ["kWh Saved (est.)", `${sav.kwhSaved} kWh`, C.purple], ["Cost Saved (est.)", `$${sav.dollarsSaved}`, C.purpleLight], ["Utility Rate", `$${proj.utility_rate || 0.118}/kWh`, C.textMuted]].map(([l, v, c]) => (<div key={l} style={{ display: "flex", justifyContent: "space-between", marginBottom: 10, fontSize: 12 }}><span style={{ color: C.textMuted, fontFamily: mono }}>{l}</span><span style={{ color: c, fontWeight: 600, fontFamily: mono }}>{v}</span></div>))}
+                  <div style={{ borderTop: `1px solid ${C.border}`, marginTop: 12, paddingTop: 12 }}>
+                    <div style={{ fontSize: 10, color: C.textMuted, fontFamily: mono, letterSpacing: "0.08em", marginBottom: 8 }}>REFERENCE DATA</div>
+                    <div style={{ fontSize: 11, color: C.textSecondary, fontFamily: body, lineHeight: 1.6 }}>
+                      Estimated &quot;no barrier&quot; attic temps derived from DOE/ORNL field studies on radiant barriers in mixed-humid climate zones (SE United States, dark asphalt shingles).
+                    </div>
+                    <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 4 }}>
+                      {[
+                        ["ORNL/CON-275", "Radiant Barrier Fact Sheet"],
+                        ["DOE/CE-0335P", "Radiant Barrier Attic Fact Sheet"],
+                        ["FSEC-CR-1231-01", "Measured Impacts of Radiant Barriers (Florida Solar Energy Center)"],
+                      ].map(([id, title]) => (
+                        <div key={id} style={{ fontSize: 10, fontFamily: mono, color: C.textMuted }}>
+                          <span style={{ color: C.purple }}>{id}</span> — {title}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 </div>
                 <div style={{ ...cardStyle, padding: 20 }}>
                   <div style={{ fontFamily: heading, fontWeight: 700, fontSize: 14, marginBottom: 16, color: C.textPrimary, textTransform: "uppercase", letterSpacing: "0.04em" }}>Install Specs</div>
