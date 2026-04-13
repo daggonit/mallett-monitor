@@ -55,28 +55,25 @@ function computeU(mix) {
   return r > 0 ? +(1 / r).toFixed(4) : 0.05;
 }
 function calcSavings(project, readings) {
-  if (!readings?.length || readings.length < 10) return { kwhSaved: 0, dollarsSaved: 0, avgAtticDelta: 0, avgIndoorDelta: 0, refDelta: 0, actualDelta: 0, reduction: 0, uValue: 0.05, cop: 4.1 };
+  if (!readings?.length || readings.length < 10) return { kwhSaved: 0, dollarsSaved: 0, refDelta: 0, actualDelta: 0, reduction: 0, uValue: 0.05, cop: 4.1 };
   const ins = typeof project.insulation === "string" ? JSON.parse(project.insulation) : (project.insulation || []);
   const u = project.ceiling_u || computeU(ins); const seer = project.seer || 14; const cop = seer / 3.412;
   const sqFt = project.sq_ft || 1800;
-  // Compare actual attic vs reference (no barrier) attic based on outdoor temp
-  let totalRefDelta = 0, totalActualDelta = 0, totalIndoorDelta = 0;
+  let totalRefDelta = 0, totalActualDelta = 0;
   readings.forEach(r => {
     const outdoor = +r.temp_outdoor;
     const refAttic = refAtticTemp(outdoor);
     totalRefDelta += (refAttic - outdoor);
     totalActualDelta += (+r.temp_attic - outdoor);
-    totalIndoorDelta += (+r.temp_indoor - outdoor);
   });
   const avgRefDelta = totalRefDelta / readings.length;
   const avgActualDelta = totalActualDelta / readings.length;
-  const avgIndoorDelta = totalIndoorDelta / readings.length;
   const reduction = Math.max(0, avgRefDelta - avgActualDelta);
   const dhr = reduction * readings.length * 2;
   const btu = dhr * sqFt * u;
   const kwh = +(btu / (cop * 3412)).toFixed(1);
   const dol = +(kwh * (project.utility_rate || 0.118)).toFixed(2);
-  return { kwhSaved: kwh, dollarsSaved: dol, avgAtticDelta: +avgActualDelta.toFixed(1), avgIndoorDelta: +avgIndoorDelta.toFixed(1), refDelta: +avgRefDelta.toFixed(1), actualDelta: +avgActualDelta.toFixed(1), reduction: +reduction.toFixed(1), uValue: +u.toFixed(4), cop: +cop.toFixed(2) };
+  return { kwhSaved: kwh, dollarsSaved: dol, refDelta: +avgRefDelta.toFixed(1), actualDelta: +avgActualDelta.toFixed(1), reduction: +reduction.toFixed(1), uValue: +u.toFixed(4), cop: +cop.toFixed(2) };
 }
 function getCumData(project, readings) {
   if (!readings?.length || readings.length < 10) return [];
@@ -149,8 +146,7 @@ function Card({ project, sel, onClick, readings }) {
     </div>
     {hasData && <div style={{ display: "flex", gap: 12 }}>
       <div><div style={{ color: C.textMuted, fontSize: 9, fontFamily: mono }}>ATTIC</div><div style={{ color: C.red, fontSize: 16, fontWeight: 700, fontFamily: heading }}>{lat.temp_attic}°</div></div>
-      <div><div style={{ color: C.textMuted, fontSize: 9, fontFamily: mono }}>IN</div><div style={{ color: C.teal, fontSize: 16, fontWeight: 700, fontFamily: heading }}>{lat.temp_indoor}°</div></div>
-      <div><div style={{ color: C.textMuted, fontSize: 9, fontFamily: mono }}>OUT</div><div style={{ color: C.amber, fontSize: 16, fontWeight: 700, fontFamily: heading }}>{lat.temp_outdoor}°</div></div>
+      <div><div style={{ color: C.textMuted, fontSize: 9, fontFamily: mono }}>OUTSIDE</div><div style={{ color: C.amber, fontSize: 16, fontWeight: 700, fontFamily: heading }}>{lat.temp_outdoor}°</div></div>
       <div style={{ marginLeft: "auto", textAlign: "right" }}><div style={{ color: C.textMuted, fontSize: 9, fontFamily: mono }}>SAVED</div><div style={{ color: C.purple, fontSize: 16, fontWeight: 700, fontFamily: heading }}>${sav.dollarsSaved}</div></div>
     </div>}
   </div>);
@@ -249,7 +245,7 @@ function formatChartData(readings, rangeDays) {
       label = d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "America/New_York" });
     }
     const outdoor = +r.temp_outdoor;
-    return { label, attic: +r.temp_attic, indoor: +r.temp_indoor, outdoor, refAttic: Math.round(refAtticTemp(outdoor)) };
+    return { label, attic: +r.temp_attic, outdoor, refAttic: Math.round(refAtticTemp(outdoor)) };
   });
 }
 
@@ -358,18 +354,18 @@ export default function Dashboard() {
 
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 24 }}>
                 <Pill label="Attic" value={lat?.temp_attic} unit="°F" accent={C.red} />
-                <Pill label="Indoor" value={lat?.temp_indoor} unit="°F" accent={C.teal} />
                 <Pill label="Outdoor" value={lat?.temp_outdoor} unit="°F" accent={C.amber} />
+                <Pill label="Attic Δ" value={sav.actualDelta} unit="°F" accent={C.amber} />
+                <Pill label="Barrier Reduction" value={sav.reduction} unit="°F" accent={C.purple} />
                 <Pill label="kWh Saved" value={sav.kwhSaved} unit="kWh" accent={C.purple} />
                 <Pill label="$ Saved" value={`$${sav.dollarsSaved}`} unit="" accent={C.purpleLight} />
-                <Pill label="SEER" value={proj.seer} unit="" accent={C.teal} />
               </div>
 
               {chartData.length > 0 ? (
                 <div style={{ ...cardStyle, padding: "20px 16px 12px", marginBottom: 16 }}>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, padding: "0 8px" }}>
                     <div style={{ fontFamily: heading, fontWeight: 700, fontSize: 16, color: C.textPrimary, letterSpacing: "0.04em", textTransform: "uppercase" }}>Temperature History</div>
-                    <div style={{ display: "flex", gap: 14 }}>{[[C.red, "Attic"], ["#ff6b6b", "No Barrier (est.)"], [C.teal, "Indoor"], [C.amber, "Outdoor"]].map(([c, l]) => (<div key={l} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 9, color: C.textMuted, fontFamily: mono }}><div style={{ width: 14, height: 2, background: c, borderRadius: 1, opacity: l.includes("est") ? 0.5 : 1 }} />{l}</div>))}</div>
+                    <div style={{ display: "flex", gap: 14 }}>{[[C.red, "Attic"], ["#ff6b6b", "No Barrier (est.)"], [C.amber, "Outdoor"]].map(([c, l]) => (<div key={l} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 9, color: C.textMuted, fontFamily: mono }}><div style={{ width: 14, height: 2, background: c, borderRadius: 1, opacity: l.includes("est") ? 0.5 : 1 }} />{l}</div>))}</div>
                   </div>
                   <ResponsiveContainer width="100%" height={250}>
                     <LineChart data={chartData} margin={{ top: 5, right: 10, left: -20, bottom: 5 }}>
@@ -378,7 +374,6 @@ export default function Dashboard() {
                       <Tooltip content={<Tip />} />
                       <Line type="monotone" dataKey="refAttic" name="No Barrier (est.)" stroke="#ff6b6b" strokeWidth={1.5} dot={false} strokeDasharray="6 3" strokeOpacity={0.5} />
                       <Line type="monotone" dataKey="attic" name="Attic" stroke={C.red} strokeWidth={2} dot={false} />
-                      <Line type="monotone" dataKey="indoor" name="Indoor" stroke={C.teal} strokeWidth={2} dot={false} />
                       <Line type="monotone" dataKey="outdoor" name="Outdoor" stroke={C.amber} strokeWidth={1.5} dot={false} strokeDasharray="4 2" />
                     </LineChart>
                   </ResponsiveContainer>
@@ -428,7 +423,7 @@ export default function Dashboard() {
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
                 <div style={{ ...cardStyle, padding: 20 }}>
                   <div style={{ fontFamily: heading, fontWeight: 700, fontSize: 14, marginBottom: 16, color: C.textPrimary, textTransform: "uppercase", letterSpacing: "0.04em" }}>Savings Breakdown</div>
-                  {[["Ref. Attic Δ (no barrier)", `${sav.refDelta}°F`, "#ff6b6b"], ["Actual Attic Δ (w/ barrier)", `${sav.actualDelta}°F`, C.amber], ["Reduction from Barrier", `${sav.reduction}°F`, C.purple], ["Indoor-Outdoor Δ", `${sav.avgIndoorDelta}°F`, C.teal], ["Blended U-Value", `${typeof uV === "number" ? uV.toFixed(4) : uV}`, C.textSecondary], ["SEER / COP", `${proj.seer || 14} / ${sav.cop}`, C.teal], ["kWh Saved (est.)", `${sav.kwhSaved} kWh`, C.purple], ["Cost Saved (est.)", `$${sav.dollarsSaved}`, C.purpleLight], ["Utility Rate", `$${proj.utility_rate || 0.118}/kWh`, C.textMuted]].map(([l, v, c]) => (<div key={l} style={{ display: "flex", justifyContent: "space-between", marginBottom: 10, fontSize: 12 }}><span style={{ color: C.textMuted, fontFamily: mono }}>{l}</span><span style={{ color: c, fontWeight: 600, fontFamily: mono }}>{v}</span></div>))}
+                  {[["Ref. Attic Δ (no barrier)", `${sav.refDelta}°F`, "#ff6b6b"], ["Actual Attic Δ (w/ barrier)", `${sav.actualDelta}°F`, C.amber], ["Reduction from Barrier", `${sav.reduction}°F`, C.purple], ["Blended U-Value", `${typeof uV === "number" ? uV.toFixed(4) : uV}`, C.textSecondary], ["SEER / COP", `${proj.seer || 14} / ${sav.cop}`, C.teal], ["kWh Saved (est.)", `${sav.kwhSaved} kWh`, C.purple], ["Cost Saved (est.)", `$${sav.dollarsSaved}`, C.purpleLight], ["Utility Rate", `$${proj.utility_rate || 0.118}/kWh`, C.textMuted]].map(([l, v, c]) => (<div key={l} style={{ display: "flex", justifyContent: "space-between", marginBottom: 10, fontSize: 12 }}><span style={{ color: C.textMuted, fontFamily: mono }}>{l}</span><span style={{ color: c, fontWeight: 600, fontFamily: mono }}>{v}</span></div>))}
                   <div style={{ borderTop: `1px solid ${C.border}`, marginTop: 12, paddingTop: 12 }}>
                     <div style={{ fontSize: 10, color: C.textMuted, fontFamily: mono, letterSpacing: "0.08em", marginBottom: 8 }}>REFERENCE DATA</div>
                     <div style={{ fontSize: 11, color: C.textSecondary, fontFamily: body, lineHeight: 1.6 }}>
@@ -449,7 +444,7 @@ export default function Dashboard() {
                 </div>
                 <div style={{ ...cardStyle, padding: 20 }}>
                   <div style={{ fontFamily: heading, fontWeight: 700, fontSize: 14, marginBottom: 16, color: C.textPrimary, textTransform: "uppercase", letterSpacing: "0.04em" }}>Install Specs</div>
-                  {[["Square Footage", proj.sq_ft ? `${proj.sq_ft.toLocaleString()} sq ft` : "—"], ["HVAC Capacity", proj.hvac_tons ? `${proj.hvac_tons} tons` : "—"], ["SEER", `${proj.seer || 14} (${proj.seer_source || "est."})`], ["Blended R-Value", `R-${typeof uV === "number" ? (1 / uV).toFixed(1) : "—"}`], ["Sensor: Attic", proj.sensor_attic || "—"], ["Sensor: Indoor", proj.sensor_indoor || "—"], ["Sensor: Outdoor", proj.sensor_outdoor || "—"]].map(([l, v]) => (<div key={l} style={{ display: "flex", justifyContent: "space-between", marginBottom: 10, fontSize: 12, gap: 12 }}><span style={{ color: C.textMuted, fontFamily: mono, flexShrink: 0 }}>{l}</span><span style={{ color: C.textSecondary, fontFamily: mono, textAlign: "right" }}>{v}</span></div>))}
+                  {[["Square Footage", proj.sq_ft ? `${proj.sq_ft.toLocaleString()} sq ft` : "—"], ["HVAC Capacity", proj.hvac_tons ? `${proj.hvac_tons} tons` : "—"], ["SEER", `${proj.seer || 14} (${proj.seer_source || "est."})`], ["Blended R-Value", `R-${typeof uV === "number" ? (1 / uV).toFixed(1) : "—"}`], ["Sensor: Attic", proj.sensor_attic || "—"], ["Sensor: Outdoor", proj.sensor_outdoor || "—"]].map(([l, v]) => (<div key={l} style={{ display: "flex", justifyContent: "space-between", marginBottom: 10, fontSize: 12, gap: 12 }}><span style={{ color: C.textMuted, fontFamily: mono, flexShrink: 0 }}>{l}</span><span style={{ color: C.textSecondary, fontFamily: mono, textAlign: "right" }}>{v}</span></div>))}
                 </div>
               </div>
             </div>
