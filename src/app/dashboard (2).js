@@ -72,6 +72,23 @@ const supaInsert = async (token, table, data) => {
   return r.json();
 };
 
+const supaUpdate = async (token, table, id, data) => {
+  const r = await fetch(`${SUPA_REST}/${table}?id=eq.${id}`, {
+    method: "PATCH",
+    headers: {
+      ...authHeaders(token),
+      Prefer: "return=representation",
+    },
+    body: JSON.stringify(data),
+  });
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}));
+    console.error("Update error:", err);
+    throw new Error(JSON.stringify(err));
+  }
+  return r.json();
+};
+
 // ── Design tokens ─────────────────────────────────────────────────────────────
 const C = { bg: "#0c0d0f", surface: "#141517", surfaceLight: "#1c1d21", lime: "#7fff00", limeLight: "#a3ff4f", limeDark: "#5cc700", limeMuted: "#3a5c1a", limeGlow: "rgba(127,255,0,0.08)", limeBorder: "rgba(127,255,0,0.15)", silver: "#c0c0c8", silverLight: "#dcdce4", red: "#e85d5d", amber: "#e0a840", textPrimary: "#e8e8ec", textSecondary: "#9898a4", textMuted: "#585864", border: "rgba(200,200,220,0.1)", inputBg: "#111214", inputBorder: "rgba(127,255,0,0.2)" };
 
@@ -309,8 +326,8 @@ export default function Dashboard() {
   const uV = proj ? (proj.ceiling_u || computeU(typeof proj.insulation === "string" ? JSON.parse(proj.insulation) : (proj.insulation || []))) : 0.05;
 
   const saveEdit = async data => {
-    try { await supaUpsert(token, "projects", { id: selId, ...data }); await loadP(); setForm(false); }
-    catch { alert("Save failed"); }
+    try { await supaUpdate(token, "projects", selId, data); await loadP(); setForm(false); }
+    catch (e) { alert("Save failed: " + e.message); }
   };
 
   const createProject = async data => {
