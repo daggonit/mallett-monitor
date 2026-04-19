@@ -68,7 +68,11 @@ const supaInsert = async (token, table, data) => {
     },
     body: JSON.stringify(data),
   });
-  if (!r.ok) throw new Error(`${r.status}`);
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}));
+    console.error("Insert error:", err);
+    throw new Error(JSON.stringify(err));
+  }
   return r.json();
 };
 
@@ -336,7 +340,7 @@ export default function Dashboard() {
       await loadP();
       setSelId(created.id);
       setAddingNew(false);
-    } catch { alert("Create failed"); }
+    } catch (e) { alert("Create failed: " + e.message); }
   };
 
   return (<div style={{ minHeight: "100vh", background: C.bg, color: C.textPrimary, fontFamily: bd }}>
