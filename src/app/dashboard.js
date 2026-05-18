@@ -295,11 +295,53 @@ export default function Dashboard() {
     } catch (e) { console.error(e); }
   }, [token, selId]);
 
-  const loadR = useCallback(async pid => {
+  const loadR = useCallback(async (pid, refresh = false) => {
     if (!token) return;
     try {
-      const d = await supaFetch(token, "readings", `select=*&project_id=eq.${pid}&order=recorded_at.asc&limit=10000`);
-      setReadings(p => ({ ...p, [pid]: d }));
+      const pageSize = 1000;
+      let allData = [];
+
+      if (!refresh) {
+        // Full paginated load (first time or project switch)
+        let offset = 0;
+        let done = false;
+        while (!done) {
+          const page = await supaFetch(
+            token,
+            "readings",
+            `select=*&project_id=eq.${pid}&order=recorded_at.asc&limit=${pageSize}&offset=${offset}`
+          );
+          allData = [...allData, ...page];
+          if (page.length < pageSize) {
+            done = true;
+          } else {
+            offset += pageSize;
+          }
+        }
+        setReadings(p => ({ ...p, [pid]: allData }));
+
+      } else {
+        // Incremental refresh (polling) — only fetch rows newer than what we have
+        setReadings(prev => {
+          const existing = prev[pid] || [];
+          const lastTs = existing.length ? existing[existing.length - 1].recorded_at : null;
+
+          if (!lastTs) return prev; // no data yet, skip
+
+          (async () => {
+            const newRows = await supaFetch(
+              token,
+              "readings",
+              `select=*&project_id=eq.${pid}&order=recorded_at.asc&recorded_at=gt.${encodeURIComponent(lastTs)}&limit=${pageSize}`
+            );
+            if (newRows.length > 0) {
+              setReadings(p => ({ ...p, [pid]: [...(p[pid] || []), ...newRows] }));
+            }
+          })();
+
+          return prev; // unchanged while fetch is in flight
+        });
+      }
     } catch (e) { console.error(e); }
   }, [token]);
 
@@ -313,7 +355,7 @@ export default function Dashboard() {
   }, [session]);
 
   useEffect(() => { if (selId && session) loadR(selId); }, [selId, session, loadR]);
-  useEffect(() => { if (!session || !selId) return; const i = setInterval(() => loadR(selId), 60000); return () => clearInterval(i); }, [session, selId, loadR]);
+  useEffect(() => { if (!session || !selId) return; const i = setInterval(() => loadR(selId, true), 60000); return () => clearInterval(i); }, [session, selId, loadR]);
 
   const handleLogin = (sess) => { setSession(sess); };
   const handleSignOut = async () => { if (token) await signOut(token); setSession(null); setProjects([]); setReadings({}); setSelId(null); };
@@ -410,7 +452,7 @@ export default function Dashboard() {
                 <div style={{ color: C.textMuted, fontSize: 10, fontFamily: mn, marginTop: 2 }}>{allR.length} readings{lat && ` · Last: ${new Date(lat.recorded_at).toLocaleString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`}</div>
               </div>
               <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                <button onClick={() => loadR(selId)} style={btn(false)}>↻</button>
+                <button onClick={() => loadR(selId, true)} style={btn(false)}>↻</button>
                 {/* Edit button — admin only */}
                 {isAdmin && <button onClick={() => setForm(!form)} style={btn(form)}>{form ? "✕" : "✎ Edit"}</button>}
                 {[["1d", 1], ["7d", 7], ["14d", 14], ["30d", 30], ["All", 365]].map(([l, d]) => <button key={l} onClick={() => qr(d)} style={btn(false)}>{l}</button>)}
